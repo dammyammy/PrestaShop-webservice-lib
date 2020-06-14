@@ -44,6 +44,9 @@ class PrestaShopWebservice
     /** @var string PS version */
     protected $version;
 
+    /** @var string OUTPUT Format XML or JSON */
+    protected $format;
+
     /** @var array compatible versions of PrestaShop Webservice */
     const psCompatibleVersionsMin = '1.4.0.0';
     const psCompatibleVersionsMax = '1.7.99.99';
@@ -68,19 +71,30 @@ class PrestaShopWebservice
      * @param string $url Root URL for the shop
      * @param string $key Authentication key
      * @param mixed $debug Debug mode Activated (true) or deactivated (false)
+     * @param mixed $format Input Output Format i.e XML (default) or JSON
      *
      * @throws PrestaShopWebserviceException if curl is not loaded
      */
-    function __construct($url, $key, $debug = true)
+    function __construct($url, $key, $debug = true, $format = 'XML')
     {
         if (!extension_loaded('curl')) {
             throw new PrestaShopWebserviceException(
                 'Please activate the PHP extension \'curl\' to allow use of PrestaShop webservice library'
             );
         }
+
+        $format = strtolower($format);
+
+        if(!in_array($format, ['xml', 'json'])) {
+            throw new PrestaShopWebserviceException(
+                'Please chose a valid Input and Output format between XML and JSON'
+            );
+        }
+
         $this->url = $url;
         $this->key = $key;
         $this->debug = $debug;
+        $this->format = $format;
         $this->version = 'unknown';
     }
 
@@ -154,6 +168,7 @@ class PrestaShopWebservice
     {
         $defaultParams = $this->getCurlDefaultParams();
 
+//        dd($url, $curl_params);
         $session = curl_init($url);
 
         $curl_options = array();
@@ -183,7 +198,7 @@ class PrestaShopWebservice
 
         $headerArrayTmp = explode("\n", $header);
 
-        $headerArray = array();
+        $headerArray = $this->format == 'xml' ? array() : array('Io-Format' => 'JSON', 'Output-Format' => 'JSON');
         foreach ($headerArrayTmp as &$headerItem) {
             $tmp = explode(':', $headerItem);
             $tmp = array_map('trim', $tmp);
@@ -215,7 +230,7 @@ class PrestaShopWebservice
         curl_close($session);
         if ($this->debug) {
             if ($curl_params[CURLOPT_CUSTOMREQUEST] == 'PUT' || $curl_params[CURLOPT_CUSTOMREQUEST] == 'POST') {
-                $this->printDebug('XML SENT', urldecode($curl_params[CURLOPT_POSTFIELDS]));
+                $this->printDebug(strtoupper($this->format) . ' SENT', urldecode($curl_params[CURLOPT_POSTFIELDS]));
             }
             if ($curl_params[CURLOPT_CUSTOMREQUEST] != 'DELETE' && $curl_params[CURLOPT_CUSTOMREQUEST] != 'HEAD') {
                 $this->printDebug('RETURN HTTP BODY', $body);
@@ -240,6 +255,24 @@ class PrestaShopWebservice
     public function getVersion()
     {
         return $this->version;
+    }
+
+    /**
+     * Load JSON from string. Can throw exception
+     *
+     * @param string $response String from a CURL response
+     *
+     * @return Object status_code, response
+     * @throws PrestaShopWebserviceException
+     * @throws PrestaShopWebserviceException
+     */
+    protected function parseJSON($response)
+    {
+        if($response != '') {
+            return json_encode($response);
+        } else {
+            throw new PrestaShopWebserviceException("HTTP response is empty");
+        }
     }
 
     /**
@@ -277,7 +310,7 @@ class PrestaShopWebservice
      *
      * @param array $options
      *
-     * @return SimpleXMLElement status_code, response
+     * @return SimpleXMLElement|Object status_code, response
      * @throws PrestaShopWebserviceException
      */
     public function add($options)
@@ -299,6 +332,11 @@ class PrestaShopWebservice
         $request = $this->executeRequest($url, array(CURLOPT_CUSTOMREQUEST => 'POST', CURLOPT_POSTFIELDS => $xml));
 
         $this->checkStatusCode($request['status_code']);
+
+        if($this->format == "json") {
+            return $this->parseJSON($request['response']);
+        }
+        
         return $this->parseXML($request['response']);
     }
 
@@ -330,7 +368,7 @@ class PrestaShopWebservice
      *
      * @param array $options Array representing resource to get.
      *
-     * @return SimpleXMLElement status_code, response
+     * @return SimpleXMLElement|Object status_code, response
      * @throws PrestaShopWebserviceException
      * @throws PrestaShopWebserviceException
      */
@@ -353,8 +391,18 @@ class PrestaShopWebservice
                     }
                 }
             }
+
             if (count($url_params) > 0) {
                 $url .= '?' . http_build_query($url_params);
+            }
+
+            if($this->format === 'json') {
+                $format_params = ['output_format' => 'JSON', 'io_format' => 'JSON'];
+                if (count($url_params) > 0) {
+                    $url .= '&' . http_build_query(array_merge($url_params, $format_params));
+                } else {
+                    $url .= '?' . http_build_query(array_merge($url_params, $format_params));
+                }
             }
         } else {
             throw new PrestaShopWebserviceException('Bad parameters given');
@@ -363,6 +411,11 @@ class PrestaShopWebservice
         $request = $this->executeRequest($url, array(CURLOPT_CUSTOMREQUEST => 'GET'));
 
         $this->checkStatusCode($request['status_code']);// check the response validity
+
+        if($this->format == "json") {
+            return $this->parseJSON($request['response']);
+        }
+        
         return $this->parseXML($request['response']);
     }
 
@@ -371,7 +424,7 @@ class PrestaShopWebservice
      *
      * @param array $options Array representing resource for head request.
      *
-     * @return SimpleXMLElement status_code, response
+     * @return SimpleXMLElement|Object status_code, response
      * @throws PrestaShopWebserviceException
      */
     public function head($options)
@@ -414,7 +467,7 @@ class PrestaShopWebservice
      *
      * @param array $options Array representing resource to edit.
      *
-     * @return SimpleXMLElement
+     * @return SimpleXMLElement|Object
      * @throws PrestaShopWebserviceException
      */
     public function edit($options)
@@ -438,6 +491,11 @@ class PrestaShopWebservice
 
         $request = $this->executeRequest($url, array(CURLOPT_CUSTOMREQUEST => 'PUT', CURLOPT_POSTFIELDS => $xml));
         $this->checkStatusCode($request['status_code']);// check the response validity
+
+        if($this->format == "json") {
+            return $this->parseJSON($request['response']);
+        }
+        
         return $this->parseXML($request['response']);
     }
 
